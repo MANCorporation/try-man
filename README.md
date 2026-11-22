@@ -34,13 +34,12 @@ its firmware. Nothing else needs to be installed.
 
 | System | Package | Build it with |
 | --- | --- | --- |
-| macOS (Apple Silicon / Intel) | `Try-MAN-10-macos-<arch>.dmg` | `packaging/macos/build-app.sh` |
+| macOS 11 Big Sur and newer (Apple Silicon / Intel) | `Try-MAN-10-macos-<arch>.dmg` | `packaging/macos/build-deps.sh` then `build-app.sh` |
 | Linux (x86_64 / arm64) | `Try-MAN-10-<arch>.AppImage` | `packaging/linux/build-appimage.sh` |
-| Windows (x64) | `Try-MAN-10-windows-x64-setup.exe` + portable `.zip` | `packaging/windows/build-windows.sh` |
+| Windows 10/11 (x64) | `Try-MAN-10-windows-x64-setup.exe` + portable `.zip` | `packaging/windows/build-windows.sh` |
 
-Each package has to be built on its own system. The easiest way is GitHub Actions:
 [.github/workflows/packages.yml](.github/workflows/packages.yml) builds all of them on
-every push, and pushing a tag publishes them as a release:
+GitHub, and pushing a tag publishes them as a release:
 
 ```bash
 git tag v10
@@ -52,22 +51,30 @@ git push origin v10
 
 ### macOS
 
+Homebrew's libraries only run on the macOS version they were built for, so for
+sharing, GTK, libadwaita and QEMU are built **from source for macOS 11** first
+(slow the first time; the result is reused):
+
 ```bash
-brew install gtk4 libadwaita adwaita-icon-theme librsvg qemu
+brew install meson ninja pkg-config adwaita-icon-theme
+```
+
+```bash
+packaging/macos/build-deps.sh
 ```
 
 ```bash
 packaging/macos/build-app.sh
 ```
 
-Makes `dist/Try MAN.app` and the `.dmg`. Every library is copied into the app and
-relinked, so it doesn't need Homebrew. Two things to know:
+This makes `dist/Try MAN.app` and the `.dmg`. Every library is copied into the app and
+relinked, and the script refuses to finish if anything still points outside the app.
+(Without `build-deps.sh`, `build-app.sh` falls back to Homebrew's libraries; that app
+only runs on the build Mac's macOS version and newer.) For an Intel `.dmg`, run the
+same on an Intel Mac (or let GitHub do it).
 
-- **macOS version:** Homebrew builds its libraries for the macOS version it runs on, so the
-  app works on *that macOS version and newer* (the script prints it and puts it in
-  `Info.plist`). Build on an older Mac (or the GitHub runner) to support older Macs.
-- **Signing:** by default the app is signed ad-hoc, which works on your own Mac. To give it
-  to other people without Gatekeeper warnings, sign with your Apple Developer ID and notarize:
+**Signing:** by default the app is signed ad-hoc, which works on your own Mac. To give it
+to other people without Gatekeeper warnings, sign with your Apple Developer ID and notarize:
 
 ```bash
 SIGN_IDENTITY="Developer ID Application: Your Name (TEAMID)" packaging/macos/build-app.sh
@@ -99,20 +106,28 @@ person can use `/dev/kvm` (normal on most desktop distros).
 
 ### Windows
 
-In an **MSYS2 UCRT64** shell (<https://www.msys2.org>):
+Can be **cross-built on a Mac or Linux**: the Windows builds of GTK, libadwaita and
+QEMU are downloaded from MSYS2 (checked against their SHA-256) by `fetch-msys2.py`.
 
 ```bash
-packaging/windows/build-windows.sh --install-deps
+brew install mingw-w64 makensis
+```
+
+```bash
+rustup target add x86_64-pc-windows-gnu
 ```
 
 ```bash
 packaging/windows/build-windows.sh
 ```
 
-Makes an installer (per-user, no administrator password, Start menu and desktop
-shortcuts, uninstaller) and a portable zip. For speed, people should switch on
-**Windows Hypervisor Platform** in *Turn Windows features on or off*; without it MAN
-still runs, just slower.
+Or natively on Windows in an **MSYS2 UCRT64** shell (<https://www.msys2.org>): run
+`packaging/windows/build-windows.sh --install-deps` once, then the same script.
+
+The build checks that every DLL needed is in the package. It makes an installer
+(per-user, no administrator password, Start menu and desktop shortcuts, uninstaller)
+and a portable zip. For speed, people should switch on **Windows Hypervisor Platform**
+in *Turn Windows features on or off*; without it MAN still runs, just slower.
 
 ## Development build
 

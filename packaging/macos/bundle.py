@@ -61,9 +61,9 @@ def rpaths(path: Path):
 
 
 class Bundler:
-    def __init__(self, app: Path, brew: Path):
+    def __init__(self, app: Path, prefix: Path):
         self.app = app
-        self.brew = brew
+        self.prefix = prefix
         self.frameworks = app / "Contents/Frameworks"
         self.frameworks.mkdir(parents=True, exist_ok=True)
         self.copied = {}  # library file name -> bundled path
@@ -79,7 +79,7 @@ class Bundler:
                 candidate = Path(rp) / name
                 if candidate.exists():
                     return candidate.resolve()
-            candidate = self.brew / "lib" / name
+            candidate = self.prefix / "lib" / name
             return candidate.resolve() if candidate.exists() else None
         path = Path(dep)
         return path.resolve() if path.exists() else None
@@ -134,24 +134,28 @@ def main():
     ap.add_argument("--icon", required=True, help="1024x1024 PNG")
     ap.add_argument("--version", required=True)
     ap.add_argument("--out", required=True)
+    ap.add_argument("--prefix", help="libraries built by build-deps.sh (default: Homebrew)")
     args = ap.parse_args()
 
     brew = Path(sh("brew", "--prefix", capture=True).strip())
+    # Where GTK, libadwaita and QEMU come from. Icons (plain data) always come
+    # from Homebrew's adwaita-icon-theme.
+    prefix = Path(args.prefix).resolve() if args.prefix else brew
     app = Path(args.out)
     shutil.rmtree(app, ignore_errors=True)
     contents = app / "Contents"
     macos = contents / "MacOS"
     res = contents / "Resources"
-    b = Bundler(app, brew)
+    b = Bundler(app, prefix)
 
     # Programs: the app and the QEMU it uses, side by side.
     to_frameworks = "@executable_path/../Frameworks"
     b.add(Path(args.binary), macos / "try-man", to_frameworks)
-    b.add(brew / f"bin/qemu-system-{args.qemu_arch}", macos / f"qemu-system-{args.qemu_arch}", to_frameworks)
-    b.add(brew / "bin/qemu-img", macos / "qemu-img", to_frameworks)
+    b.add(prefix / f"bin/qemu-system-{args.qemu_arch}", macos / f"qemu-system-{args.qemu_arch}", to_frameworks)
+    b.add(prefix / "bin/qemu-img", macos / "qemu-img", to_frameworks)
 
     # QEMU firmware and keyboard maps
-    qemu_src = (brew / "share/qemu").resolve()
+    qemu_src = (prefix / "share/qemu").resolve()
     qemu_dst = res / "qemu/share/qemu"
     qemu_dst.mkdir(parents=True)
     shutil.copytree(qemu_src / "keymaps", qemu_dst / "keymaps")
@@ -159,23 +163,27 @@ def main():
         if (qemu_src / name).exists():
             shutil.copy2(qemu_src / name, qemu_dst / name)
 
-    # SVG image loader (GTK's symbolic icons are SVG)
+    # SVG image loader, if there is one. (GTK 4.22+ draws the symbolic icons
+    # by itself, so the from-source build doesn't need librsvg.)
     loaders_rel = Path("lib/gdk-pixbuf-2.0/2.10.0")
-    loader_src = brew / loaders_rel / "loaders/libpixbufloader_svg.so"
-    loader_dst = res / loaders_rel / "loaders/libpixbufloader_svg.so"
-    b.add(loader_src, loader_dst, "@loader_path/../../../../../Frameworks")
-    cache = sh(str(brew / "bin/gdk-pixbuf-query-loaders"), str(loader_dst.resolve()), capture=True)
-    cache = "\n".join(l for l in cache.splitlines() if not l.startswith("#"))
-    if "svg" not in cache:
-        sys.exit("error: the SVG image loader didn't load")
-    (res / loaders_rel / "loaders.cache.in").write_text(cache.replace(str(res.resolve()), "@RESOURCES@") + "\n")
+    loader_src = prefix / loaders_rel / "loaders/libpixbufloader_svg.so"
+    if loader_src.exists():
+        loader_dst = res / loaders_rel / "loaders/libpixbufloader_svg.so"
+        b.add(loader_src, loader_dst, "@loader_path/../../../../../Frameworks")
+        cache = sh(str(prefix / "bin/gdk-pixbuf-query-loaders"), str(loader_dst.resolve()), capture=True)
+        cache = "\n".join(l for l in cache.splitlines() if not l.startswith("#"))
+        if "svg" not in cache:
+            sys.exit("error: the SVG image loader didn't load")
+        (res / loaders_rel / "loaders.cache.in").write_text(cache.replace(str(res.resolve()), "@RESOURCES@") + "\n")
 
     # GTK settings schemas
     schemas = res / "share/glib-2.0/schemas"
     schemas.mkdir(parents=True)
-    for xml in (brew / "share/glib-2.0/schemas").glob("org.gtk.gtk4.*.gschema.xml"):
+    for xml in (prefix / "share/glib-2.0/schemas").glob("org.gtk.gtk4.*.gschema.xml"):
         shutil.copy2(xml, schemas)
-    sh(str(brew / "bin/glib-compile-schemas"), str(schemas))
+    if not any(schemas.iterdir()):
+        sys.exit("error: GTK's settings schemas are missing")
+    sh(str(prefix / "bin/glib-compile-schemas"), str(schemas))
 
     # Icon themes
     icons = res / "share/icons"
@@ -198,7 +206,7 @@ def main():
 
     # The app needs the newest macOS any of its parts was built for
     # (Homebrew builds for the macOS version of the build machine).
-    minimum = (12, 0)
+    minimum = (11, 0)
     for path in app.rglob("*"):
         if path.is_file() and is_macho(path):
             for v in re.findall(r"minos (\d+)\.(\d+)", sh("otool", "-l", str(path), capture=True)):
@@ -228,9 +236,10 @@ def main():
     for path in app.rglob("*"):
         if path.is_file() and is_macho(path):
             refs = dependencies(path) + rpaths(path)
-            leftovers += [f"{path.relative_to(app)} -> {r}" for r in refs if str(brew) in r or "/usr/local/" in r]
+            leftovers += [f"{path.relative_to(app)} -> {r}" for r in refs
+                          if str(brew) in r or str(prefix) in r or "/usr/local/" in r]
     if leftovers:
-        sys.exit("error: still linked to Homebrew:\n  " + "\n  ".join(leftovers))
+        sys.exit("error: still linked to files outside the app:\n  " + "\n  ".join(leftovers))
     print(f"bundled {len(b.copied)} libraries into {app}")
 
 

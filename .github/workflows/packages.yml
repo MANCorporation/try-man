@@ -1,5 +1,5 @@
 # Builds the standalone packages:
-#   macOS  .dmg  (Apple Silicon and Intel)
+#   macOS  .dmg  (Apple Silicon and Intel, macOS 11 and newer)
 #   Linux  .AppImage (x86_64 and arm64)
 #   Windows setup .exe + portable .zip
 # Pushing a tag like "v10" also publishes them as a GitHub release.
@@ -17,16 +17,21 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # The app runs on this macOS version and newer, so use old runners.
-        runner: [macos-14, macos-15-intel]   # Apple Silicon, Intel
+        runner: [macos-15, macos-15-intel]   # Apple Silicon, Intel
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - run: brew install gtk4 libadwaita adwaita-icon-theme librsvg qemu
+      - run: brew install meson ninja pkg-config adwaita-icon-theme
+      # GTK, libadwaita and QEMU built from source for macOS 11+ (slow, so cached)
+      - uses: actions/cache@v4
+        with:
+          path: build/macos-deps-11.0
+          key: macos-deps-${{ runner.arch }}-${{ hashFiles('packaging/macos/build-deps.sh') }}
+      - run: packaging/macos/build-deps.sh
       - run: packaging/macos/build-app.sh
         env:
-          # Optional: set these secrets to sign with your Apple Developer ID.
+          # Optional: set this secret to sign with your Apple Developer ID.
           SIGN_IDENTITY: ${{ secrets.MACOS_SIGN_IDENTITY }}
       - uses: actions/upload-artifact@v4
         with:
