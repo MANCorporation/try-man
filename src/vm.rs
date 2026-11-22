@@ -4,6 +4,7 @@ use std::ffi::OsString;
 use std::fs::{self, File, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::time::{Duration, Instant};
 
 use gtk::glib;
@@ -118,9 +119,16 @@ pub struct Qemu {
     pub gl: bool,
     /// Firmware/BIOS folder of a QEMU that is bundled inside Try MAN.
     pub data_dir: Option<PathBuf>,
+    /// Plug-in modules (graphics etc.) of a bundled QEMU (Linux AppImage).
+    pub module_dir: Option<PathBuf>,
 }
 
 impl Qemu {
+    /// A command for one of QEMU's programs, set up to find bundled modules.
+    pub fn command(&self, program: &Path) -> Command {
+        qemu_command(program, self.module_dir.as_deref())
+    }
+
     /// QEMU 9.0+ can write saved state straight to a file.
     fn has_file_migration(&self) -> bool {
         self.version >= (9, 0)
@@ -134,31 +142,43 @@ pub fn find_qemu(arch: Arch) -> Option<Qemu> {
         .map(|d| d.join(format!("qemu-img{}", std::env::consts::EXE_SUFFIX)))
         .filter(|p| p.is_file())
         .or_else(|| system::find_program("qemu-img"))?;
-    let version = system::command(&system)
+    let module_dir = bundled_dir(&system, &["../lib/qemu"], "");
+    let version = qemu_command(&system, module_dir.as_deref())
         .arg("--version")
         .output()
         .ok()
         .and_then(|o| parse_version(&String::from_utf8_lossy(&o.stdout)))
         .unwrap_or((0, 0));
-    let gl = detect_gl(&system, arch);
-    let data_dir = bundled_data_dir(&system);
-    Some(Qemu { system, img, version, gl, data_dir })
+    let gl = detect_gl(&system, arch, module_dir.as_deref());
+    let data_dir = bundled_dir(
+        &system,
+        &["../share/qemu", "../Resources/qemu/share/qemu"], // AppImage/Windows, macOS
+        "keymaps",
+    );
+    Some(Qemu { system, img, version, gl, data_dir, module_dir })
 }
 
-/// When QEMU ships inside Try MAN (.app, AppImage, Windows folder), tell it
-/// where its BIOS and keyboard files are.
-fn bundled_data_dir(system: &Path) -> Option<PathBuf> {
+fn qemu_command(program: &Path, module_dir: Option<&Path>) -> Command {
+    let mut cmd = system::command(program);
+    if let Some(dir) = module_dir {
+        cmd.env("QEMU_MODULE_DIR", dir);
+    }
+    cmd
+}
+
+/// When QEMU ships inside Try MAN (.app, AppImage, Windows folder), its
+/// files are found relative to it: the first of `candidates` (relative to
+/// QEMU's folder) that exists and contains `marker`.
+fn bundled_dir(system: &Path, candidates: &[&str], marker: &str) -> Option<PathBuf> {
     let bin = system.parent()?;
     let ours = std::env::current_exe().ok()?.parent()?.to_path_buf();
     if bin != ours.as_path() {
         return None; // a QEMU installed on the system finds its own files
     }
-    [
-        bin.join("../share/qemu"),             // AppImage, Windows
-        bin.join("../Resources/qemu/share/qemu"), // macOS .app
-    ]
-    .into_iter()
-    .find(|d| d.join("keymaps").is_dir())
+    candidates
+        .iter()
+        .map(|c| bin.join(c))
+        .find(|d| d.join(marker).exists())
 }
 
 /// The virtual graphics card that passes 3D work to the real graphics card.
@@ -171,7 +191,7 @@ fn gl_device(arch: Arch) -> &'static str {
 
 /// Accelerated graphics need Linux, a usable GPU render node, and a QEMU
 /// built with OpenGL/virglrenderer. (Homebrew's macOS QEMU has no virgl.)
-fn detect_gl(system: &Path, arch: Arch) -> bool {
+fn detect_gl(system: &Path, arch: Arch, module_dir: Option<&Path>) -> bool {
     if !cfg!(target_os = "linux") {
         return false;
     }
@@ -187,7 +207,7 @@ fn detect_gl(system: &Path, arch: Arch) -> bool {
         return false;
     }
     let help = |what: &str| {
-        system::command(system)
+        qemu_command(system, module_dir)
             .args([what, "help"])
             .output()
             .map(|o| {
@@ -459,8 +479,11 @@ pub fn build_args(
         "usb-tablet".into(),
         "-device".into(),
         "usb-kbd".into(),
-        "-nic".into(),
-        "user,model=virtio-net-pci".into(),
+        // No network boot ROM: MAN never boots from the network.
+        "-netdev".into(),
+        "user,id=net0".into(),
+        "-device".into(),
+        "virtio-net-pci,netdev=net0,romfile=".into(),
         "-device".into(),
         "virtio-rng-pci".into(),
         // We draw the screen ourselves, through a private VNC socket.

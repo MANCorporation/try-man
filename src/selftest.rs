@@ -137,7 +137,7 @@ fn export_app_icon() {
 #[test]
 fn gl_options() {
     use crate::net::Endpoint;
-    let qemu = vm::Qemu { system: "qemu".into(), img: "qemu-img".into(), version: (11, 0), gl: true, data_dir: None };
+    let qemu = vm::Qemu { system: "qemu".into(), img: "qemu-img".into(), version: (11, 0), gl: true, data_dir: None, module_dir: None };
     let sockets = vm::Sockets { dir: "/tmp/t".into(), vnc: Endpoint::Unix("/tmp/t/vnc".into()), qmp: Endpoint::Unix("/tmp/t/qmp".into()) };
     for (arch, device) in [(Arch::X86_64, "virtio-vga-gl"), (Arch::Aarch64, "virtio-gpu-gl-pci")] {
         let cfg = VmConfig { arch, iso: "/a.iso".into(), version_name: "x".into(), memory_mb: 2048, cpus: 2 };

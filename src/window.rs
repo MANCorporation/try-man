@@ -1038,7 +1038,7 @@ impl TryMan {
             && !self.gl_failed.get();
         let args = vm::build_args(&cfg, &self.paths, &qemu, &sockets, resume, gl);
 
-        let mut cmd = system::command(&qemu.system);
+        let mut cmd = qemu.command(&qemu.system);
         cmd.args(&args)
             .stdin(Stdio::null())
             .stdout(Stdio::null())

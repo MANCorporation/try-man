@@ -196,6 +196,15 @@ def main():
             "</fontconfig>\n"
         )
 
+    # The app needs the newest macOS any of its parts was built for
+    # (Homebrew builds for the macOS version of the build machine).
+    minimum = (12, 0)
+    for path in app.rglob("*"):
+        if path.is_file() and is_macho(path):
+            for v in re.findall(r"minos (\d+)\.(\d+)", sh("otool", "-l", str(path), capture=True)):
+                minimum = max(minimum, (int(v[0]), int(v[1])))
+    print(f"needs macOS {minimum[0]}.{minimum[1]} or newer")
+
     make_icns(Path(args.icon), res / "AppIcon.icns", Path(args.out).parent / ".icon-tmp")
     shutil.rmtree(Path(args.out).parent / ".icon-tmp", ignore_errors=True)
 
@@ -209,7 +218,7 @@ def main():
             "CFBundlePackageType": "APPL",
             "CFBundleShortVersionString": args.version,
             "CFBundleVersion": args.version,
-            "LSMinimumSystemVersion": "12.0",
+            "LSMinimumSystemVersion": f"{minimum[0]}.{minimum[1]}",
             "LSApplicationCategoryType": "public.app-category.utilities",
             "NSHighResolutionCapable": True,
         }, f)
