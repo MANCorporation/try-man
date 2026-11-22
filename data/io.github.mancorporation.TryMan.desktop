@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Try MAN
+Comment=Try MAN safely in a virtual computer
+Exec=try-man
+Icon=io.github.mancorporation.TryMan
+Terminal=false
+Categories=System;Emulator;GTK;
+Keywords=MAN;virtual;machine;VM;qemu;distro;
+StartupNotify=true
